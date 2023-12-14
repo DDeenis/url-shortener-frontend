@@ -16,7 +16,7 @@ export function AuthDialog() {
     <Dialog>
       <DialogTrigger
         as={Button}
-        class="bg-blue-500 text-white rounded-none"
+        class="bg-destructive text-destructive-foreground hover:text-primary-foreground rounded-none"
         type="button"
       >
         Login
