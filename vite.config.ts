@@ -15,6 +15,10 @@ export default defineConfig({
         target: "http://localhost:8080",
         changeOrigin: true,
       },
+      "^/s/[A-Za-z0-9_-]+": {
+        target: "http://localhost:8080",
+        changeOrigin: true,
+      },
     },
   },
 });

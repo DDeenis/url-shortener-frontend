@@ -1,56 +1,50 @@
-import { createStore } from "solid-js/store";
+import { createSignal } from "solid-js";
+import { createStore, produce, reconcile } from "solid-js/store";
 
-type ValidationError = { [key: string]: string };
-type Validator<T> = (value: T) => ValidationError | undefined;
-type FieldProperties<T> = {
-  value: T;
-  validators?: Validator<T>[];
-};
-type FormValueType = string | number | string[] | undefined;
-type FormConfig<T> = {
-  [Key in keyof T]: FieldProperties<T[Key]>;
+type ValidationError = { type: string; message?: string };
+type Validator<TValue, TState> = (
+  value: TValue | undefined | null,
+  formState: TState
+) => ValidationError | undefined;
+type FormValueType =
+  | string
+  | number
+  | string[]
+  | boolean
+  | Date
+  | FileList
+  | undefined
+  | null;
+
+interface FormConfig<TFields> {
+  defaultValues?: Partial<TFields>;
+}
+interface RegisterOptions<TValue, TState> {
+  required?: boolean;
+  name?: string;
+  validators?: Validator<TValue, TState>[];
+  onInput?: (value: TValue) => void;
+}
+type RegisterReturnValues<TFields, T extends keyof TFields> = {
+  name: string | keyof TFields;
+  value: TFields[T] | undefined;
+  required: boolean;
+  onInput({ target }: InputEvent): void;
 };
 
-const getValidators = <T>(formConfig: FormConfig<T>) => {
-  const keys = Object.keys(formConfig) as (keyof T)[];
-  const validators = Object.assign(
-    {},
-    ...keys.map((k) => ({
-      [k]: formConfig[k].validators ?? [],
-    }))
+export function createForm<
+  TFields extends Record<string, FormValueType> = never
+>(formConfig?: FormConfig<TFields>) {
+  type TKeys = keyof TFields;
+  type TState = { [TField in TKeys]?: TFields[TField] | null | undefined };
+  const [formStore, setFormStore] = createStore<TState>(
+    formConfig?.defaultValues
   );
-  return validators as { [Key in keyof T]: Validator<T[Key]>[] };
-};
-
-const getValues = <T>(formConfig: FormConfig<T>) => {
-  const keys = Object.keys(formConfig) as (keyof T)[];
-  const values = Object.assign(
-    {},
-    ...keys.map((k) => ({
-      [k]: formConfig[k].value,
-    }))
-  );
-  return values as { [Key in keyof T]: T[Key] };
-};
-
-const getEmptyErrors = <T>(formConfig: FormConfig<T>) => {
-  type TKeys = keyof T;
-  const keys = Object.keys(formConfig) as TKeys[];
-  const errors = {};
-  Object.assign(
-    errors,
-    ...keys.map((k) => ({
-      [k]: [],
-    }))
-  );
-  return errors as { [P in TKeys]: ValidationError[] };
-};
-
-export function createForm<T extends object>(formConfig: FormConfig<T>) {
-  type TKeys = keyof T;
-  const [formStore, setFormStore] = createStore(getValues(formConfig));
-  const [errorStore, setErrorStore] = createStore(getEmptyErrors(formConfig));
-  const validators = getValidators(formConfig);
+  const [errorStore, setErrorStore] =
+    createStore<{ [TField in TKeys]?: ValidationError[] }>();
+  const [validators, setValidators] = createSignal<{
+    [TField in TKeys]?: Validator<TFields[TField] | undefined, TState>[];
+  }>({});
 
   const validateAll = () => {
     for (const key in formStore) {
@@ -59,45 +53,50 @@ export function createForm<T extends object>(formConfig: FormConfig<T>) {
   };
 
   const validate = (key: TKeys) => {
-    const validatorFns = validators[key];
+    const validatorFns = validators()[key];
     const errors: ValidationError[] = [];
-    validatorFns.forEach((validator) => {
-      const validationResult = validator(formStore[key]);
+    validatorFns?.forEach((validator) => {
+      const validationResult = validator(formStore[key], formStore);
       validationResult && errors.push(validationResult);
     });
-    // @ts-expect-error
-    setErrorStore(key, errors);
+
+    setErrorStore(
+      produce((store) => {
+        store[key] = errors;
+      })
+    );
   };
 
   const getError = (key: TKeys, errorKey: string) => {
-    return errorStore[key].find((err) => errorKey in err)?.[errorKey];
+    return errorStore[key]?.find((err) => errorKey in err);
   };
 
   const setError = (key: TKeys, error: ValidationError) => {
-    const fieldErrors = errorStore[key];
+    const fieldErrors = errorStore[key] ?? [];
 
-    const currentErrorKeys = fieldErrors.flatMap((err) => Object.keys(err));
-    for (let errorKey in error) {
-      if (currentErrorKeys.includes(errorKey)) continue;
+    const currentErrorTypes = fieldErrors.map((error) => error.type);
+    if (currentErrorTypes.includes(error.type)) return;
 
-      // @ts-expect-error
-      setErrorStore({
-        [key]: [...fieldErrors, error],
-      });
-    }
+    setErrorStore(
+      produce((store) => {
+        store[key] = [...fieldErrors, error];
+      })
+    );
   };
 
   const hasError = (key: TKeys, errorKey: string) => {
-    const fieldErrors = errorStore[key];
+    const fieldErrors = errorStore[key] ?? [];
     return fieldErrors.some((err) => errorKey in err);
   };
 
   const isInvalid = (key: TKeys) => {
-    return errorStore[key].length !== 0;
+    const errors = errorStore[key];
+    return errors !== undefined && errors.length !== 0;
   };
 
   const isValid = (key: TKeys) => {
-    return errorStore[key].length === 0;
+    const errors = errorStore[key];
+    return errors === undefined || errors.length === 0;
   };
 
   const isFormValid = () => {
@@ -105,39 +104,93 @@ export function createForm<T extends object>(formConfig: FormConfig<T>) {
     return keys.every(isValid);
   };
 
-  const setValue = (key: TKeys, value: (typeof formStore)[TKeys]) => {
-    // @ts-expect-error
-    setFormStore(key, value);
+  const setValue = <T extends TKeys>(key: T, value: TFields[T]) => {
+    setFormStore(
+      produce((store) => {
+        store[key] = value;
+      })
+    );
+
     validate(key);
   };
 
-  const setValues = (obj: T) => {
+  const setValues = (obj: Partial<TFields>) => {
     setFormStore(obj);
   };
 
-  const onSubmit =
-    (cb: (formValues: typeof formStore) => void) => (e: Event) => {
-      e.preventDefault();
-      validateAll();
-      if (isFormValid()) {
-        cb(formStore);
-      }
-    };
+  const onSubmit = (cb: (formValues: TState) => void) => (e: Event) => {
+    e.preventDefault();
+    validateAll();
 
-  const register = (key: TKeys) => {
+    if (isFormValid()) {
+      cb(formStore);
+    }
+  };
+
+  const register = <T extends TKeys>(
+    key: T,
+    options?: RegisterOptions<TFields[T], TState>
+  ): RegisterReturnValues<TFields, T> => {
+    const validators = options?.validators ?? [];
+    options?.required && validators.push(Validators.required);
+
+    setValidators((store) => ({ ...store, [key]: validators }));
+
+    if (options?.required && !(key in formStore)) {
+      setFormStore(
+        produce((store) => {
+          store[key] = null;
+        })
+      );
+    }
+
     return {
-      name: key,
-      value: formStore[key],
-      onInput({ target }: Event) {
-        if (!target || !("value" in target)) return;
-        setValue(key, target.value as (typeof formStore)[TKeys]);
+      name: options?.name ?? (key as TKeys),
+      value: formStore[key] ?? undefined,
+      required: options?.required ?? false,
+      onInput({ target }: InputEvent) {
+        const t = target as
+          | HTMLInputElement
+          | HTMLTextAreaElement
+          | HTMLSelectElement
+          | null;
+
+        if (!t) return;
+
+        let value: unknown = t.value;
+
+        // handle multiple <input> types
+        if (t.type === "number" || t.type === "range") {
+          value = (t as HTMLInputElement).valueAsNumber;
+        } else if (
+          t.type === "date" ||
+          t.type === "datetime-local" ||
+          t.type === "week" ||
+          t.type === "month" ||
+          t.type === "time"
+        ) {
+          value = (t as HTMLInputElement).valueAsDate;
+        } else if (t.type === "checkbox") {
+          value = (t as HTMLInputElement).checked;
+        } else if (t.type === "file") {
+          value = (t as HTMLInputElement).files;
+        }
+
+        setValue(key, value as TFields[typeof key]);
+        options?.onInput?.(value as TFields[typeof key]);
       },
     };
   };
 
+  const registerMany = <T extends TKeys>(
+    handlers: { key: T; options?: RegisterOptions<TFields[T], TState> }[]
+  ) => {
+    return handlers.map((h) => register(h.key, h.options));
+  };
+
   const resetForm = () => {
-    setFormStore(getValues(formConfig));
-    setErrorStore(getEmptyErrors(formConfig));
+    setFormStore(reconcile({}));
+    setErrorStore(reconcile({}));
   };
 
   return {
@@ -152,6 +205,7 @@ export function createForm<T extends object>(formConfig: FormConfig<T>) {
     isValid,
     isFormValid,
     register,
+    registerMany,
     setValue,
     setValues,
     onSubmit,
@@ -160,40 +214,42 @@ export function createForm<T extends object>(formConfig: FormConfig<T>) {
 }
 
 const emailRegex = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/;
+const urlRegex =
+  /https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)/;
 export const Validators = {
   string(value: FormValueType) {
     return typeof value === "string"
       ? undefined
-      : { string: "Value should be a string" };
+      : { type: "string", message: "Value should be a string" };
   },
   number(value: FormValueType) {
     return typeof value === "number"
       ? undefined
-      : { number: "Value should be a number" };
+      : { type: "number", message: "Value should be a number" };
   },
   boolean(value: FormValueType) {
     return typeof value === "boolean"
       ? undefined
-      : { number: "Value should be a boolean" };
+      : { type: "boolean", message: "Value should be a boolean" };
   },
   required(value: FormValueType) {
-    return value !== undefined && value !== ""
+    return value !== undefined && value !== null && value !== ""
       ? undefined
-      : { required: "Value is required" };
+      : { type: "required", message: "Value is required" };
   },
   min(minLength: number) {
     return (value: FormValueType) => {
       if (typeof value === "string") {
         return value.length <= minLength
           ? undefined
-          : { min: `Minimum length is ${minLength}` };
-      }
-      if (typeof value === "number" || typeof value === "bigint") {
+          : { type: "min", message: `Minimum length is ${minLength}` };
+      } else if (typeof value === "number" || typeof value === "bigint") {
         return value <= minLength
           ? undefined
-          : { min: `Minimum value is ${minLength}` };
+          : { type: "min", message: `Minimum value is ${minLength}` };
+      } else if (value) {
+        throw `Can't check min length for type ${typeof value}`;
       }
-      throw `Can't check min length for type ${typeof value}`;
     };
   },
   max(maxLength: number) {
@@ -201,30 +257,43 @@ export const Validators = {
       if (typeof value === "string") {
         return value.length <= maxLength
           ? undefined
-          : { max: `Maximum length is ${maxLength}` };
-      }
-      if (typeof value === "number" || typeof value === "bigint") {
+          : { type: "max", message: `Maximum length is ${maxLength}` };
+      } else if (typeof value === "number" || typeof value === "bigint") {
         return value <= maxLength
           ? undefined
-          : { max: `Maximum value is ${maxLength}` };
+          : { type: "max", message: `Maximum value is ${maxLength}` };
+      } else if (value) {
+        throw `Can't check max length for type ${typeof value}`;
       }
-      throw `Can't check max length for type ${typeof value}`;
     };
   },
   email(value: FormValueType) {
     if (typeof value === "string") {
-      return emailRegex.test(value) ? undefined : { email: "Email is invalid" };
+      return emailRegex.test(value)
+        ? undefined
+        : { type: "email", message: "Email is invalid" };
+    } else if (value) {
+      throw `Value of type ${typeof value} can't be validates as email`;
     }
-    throw `Value of type ${typeof value} can't be validates as email`;
+  },
+  url(value: FormValueType) {
+    if (typeof value === "string") {
+      return urlRegex.test(value)
+        ? undefined
+        : { type: "url", message: "URL is invalid" };
+    } else if (value) {
+      throw `Value of type ${typeof value} can't be validates as URL`;
+    }
   },
   pattern(regex: RegExp) {
     return (value: FormValueType) => {
       if (typeof value === "string") {
         return regex.test(value)
           ? undefined
-          : { pattern: "Pattern don't match" };
+          : { type: "pattern", message: "Pattern don't match" };
+      } else if (value) {
+        throw `Value of type ${typeof value} can't matched by regex`;
       }
-      throw `Value of type ${typeof value} can't matched by regex`;
     };
   },
 };

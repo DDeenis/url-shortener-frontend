@@ -1,7 +1,8 @@
-import { Sections, currentSection } from "~/state";
+import { Sections, currentSection, isLogged } from "~/state";
 import { buttonVariants } from "../ui/button";
 import clsx from "clsx";
 import { AuthDialog } from "./AuthDialog";
+import { Show } from "solid-js";
 
 const buttonClassBase =
   "flex-grow rounded-none hover:brightness-75 dark:hover:brightness-125";
@@ -25,35 +26,39 @@ export function Navigation() {
       >
         Shortener
       </a>
-      <a
-        href="#history"
-        class={buttonVariants({
-          variant: "ghost",
-          class: clsx(
-            buttonClassBase,
-            currentSection() === Sections.History
-              ? buttonClassActive
-              : buttonClassInactive
-          ),
-        })}
-      >
-        History
-      </a>
-      <a
-        href="#profile"
-        class={buttonVariants({
-          variant: "ghost",
-          class: clsx(
-            buttonClassBase,
-            currentSection() === Sections.Profile
-              ? buttonClassActive
-              : buttonClassInactive
-          ),
-        })}
-      >
-        Profile
-      </a>
-      <AuthDialog />
+      <Show when={isLogged()}>
+        <a
+          href="#history"
+          class={buttonVariants({
+            variant: "ghost",
+            class: clsx(
+              buttonClassBase,
+              currentSection() === Sections.History
+                ? buttonClassActive
+                : buttonClassInactive
+            ),
+          })}
+        >
+          History
+        </a>
+        <a
+          href="#profile"
+          class={buttonVariants({
+            variant: "ghost",
+            class: clsx(
+              buttonClassBase,
+              currentSection() === Sections.Profile
+                ? buttonClassActive
+                : buttonClassInactive
+            ),
+          })}
+        >
+          Profile
+        </a>
+      </Show>
+      <Show when={!isLogged()}>
+        <AuthDialog />
+      </Show>
     </div>
   );
 }
